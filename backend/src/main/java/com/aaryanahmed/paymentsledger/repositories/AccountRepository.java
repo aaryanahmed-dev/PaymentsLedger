@@ -1,0 +1,7 @@
+package com.aaryanahmed.paymentsledger.repositories;
+
+import com.aaryanahmed.paymentsledger.account.Account;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AccountRepository extends JpaRepository<Account, Long> {
+}
