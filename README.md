@@ -7,7 +7,9 @@ A double-entry payments ledger API: accounts, transfers, deposits and reversals,
 ![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-6DB33F)
 ![MySQL 8.4](https://img.shields.io/badge/MySQL-8.4-4479A1)
 
-**Live demo / Swagger UI:** [LIVE_DEMO_URL]
+**Live demo (Swagger UI):** https://payments-ledger-5x7m.onrender.com/swagger-ui.html
+
+The demo runs on free hosting (Render, with a small hosted MySQL). It sleeps when idle, so the first request can take about a minute, and it is slower than a local run.
 
 ## Overview
 
