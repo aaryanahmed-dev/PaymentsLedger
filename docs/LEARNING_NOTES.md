@@ -562,3 +562,66 @@ cause, then correct the balance with an explicit adjusting entry rather than by 
 **How do you reconcile while writes are happening?**
 Read everything inside one transaction at REPEATABLE READ, so all queries see one point in
 time. No locks are needed and transfers are not blocked.
+
+---
+
+## Phase 7 – Load testing
+
+### What was built
+A k6 script, `loadtest/transfers.js`, that seeds 20 accounts, fires 5,000 random transfers
+from 50 concurrent virtual users, then calls the reconciliation endpoint and fails the run
+if the ledger does not balance. How to run it and the measured results are in
+`loadtest/README.md`; the raw k6 output is in `loadtest/results/`.
+
+### The real result (2026-11-15, one developer machine)
+5,000 transfer requests in 38.5 s (129.9 requests/s): 4,565 created, 435 correctly rejected
+for insufficient funds, 0 errors. Request duration averaged 366 ms (p95 487 ms). Afterwards
+the reconciliation reported `balanced: true` over 9,310 entries, and no account was negative.
+See `loadtest/README.md` for the machine and setup these numbers come from.
+
+### Concepts
+
+**Load test versus unit test.** The concurrency tests in Phase 3 prove specific races are
+fixed. A load test throws realistic, random, sustained traffic at the whole running system
+through real HTTP, and finds what nobody thought to write a test for (connection pool
+exhaustion, deadlocks between features, timeouts).
+
+**Virtual users and iterations.** A virtual user (VU) is a loop that sends a request, waits
+for the response, then sends the next. 50 VUs means up to 50 requests in flight at once.
+`shared-iterations` splits a fixed total (5,000) between them.
+
+**Thresholds.** Pass/fail rules for the run, such as `http_req_failed: rate<0.01`. They make a
+load test usable in automation: the exit code says whether it passed.
+
+**Percentiles.** The average hides the slow requests. p95 = 487 ms means 95% of requests were
+faster than that and 5% were slower. Latency targets are normally stated as percentiles.
+
+**Correctness is the headline, not speed.** For a ledger, the question a load test answers is
+"is the money still right after thousands of concurrent transfers?". That is why the script
+ends with the reconciliation and treats it as a threshold.
+
+**Where the time goes.** 50 users share a pool of 10 database connections, so most requests
+wait for a connection, and transfers on the same account wait for its row lock. The test uses
+only 20 accounts on purpose, to make contention as bad as possible.
+
+### Interview questions
+
+**What did your load test show?**
+Give the real numbers and the conditions: 50 concurrent users, 5,000 transfers over 20
+accounts, about 130 requests per second on a 6-core desktop with MySQL in Docker, zero
+errors, and the ledger reconciled exactly afterwards. Be clear it is a single-machine
+measurement, not a capacity claim.
+
+**Why were 435 requests "rejected", and is that a problem?**
+They were 422 responses: the randomly chosen sender did not have enough money. That is the
+overdraft rule working under load. The script counts them separately from errors.
+
+**How would you make it faster?**
+Measure first. Likely candidates: a larger connection pool (to a point; the database has
+limits too), fewer round trips per transfer (it does several inserts and updates), and
+batching inserts. The row locks themselves are inherent: two transfers on one account must
+be serialised. Real systems have far more than 20 accounts, so contention is much lower.
+
+**Why does p95 matter more than the average?**
+Users experience individual requests, not averages. A good average can hide a tail of very
+slow requests, and at scale a "rare" 1-in-20 slow request happens constantly.

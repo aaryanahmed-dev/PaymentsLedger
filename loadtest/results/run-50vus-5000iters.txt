@@ -1,0 +1,62 @@
+
+         /\      Grafana   /‾‾/  
+    /\  /  \     |\  __   /  /   
+   /  \/    \    | |/ /  /   ‾‾\ 
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/ 
+
+     execution: local
+        script: /scripts/transfers.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 50 max VUs, 10m30s max duration (incl. graceful stop):
+              * random_transfers: 5000 iterations shared among 50 VUs (maxDuration: 10m0s, gracefulStop: 30s)
+
+time="2026-11-15T21:25:57Z" level=info msg="Reconciliation report: {\"checkedAt\":\"2026-11-15T21:25:57.769943500Z\",\"balanced\":true,\"ledgerTotal\":0,\"accountsChecked\":43,\"entriesChecked\":9310,\"mismatches\":[]}" source=console
+
+  █ THRESHOLDS 
+
+    http_req_failed
+    ✓ 'rate<0.01' rate=0.00%
+
+    ledger_balanced
+    ✓ 'rate==1' rate=100.00%
+
+    unexpected_responses
+    ✓ 'count==0' count=0
+
+  █ TOTAL RESULTS 
+
+    checks_total.......: 5023    130.449903/s
+    checks_succeeded...: 100.00% 5023 out of 5023
+    checks_failed......: 0.00%   0 out of 5023
+
+    ✓ transfer is 201 or 422
+    ✓ ledger is balanced
+    ✓ ledger total is zero
+    ✓ no mismatched accounts
+    ✓ balance is not negative
+
+    CUSTOM
+    ledger_balanced.........................: 100.00% 1 out of 1
+    transfers_created.......................: 4565    118.555407/s
+    transfers_rejected_insufficient_funds...: 435     11.297175/s
+    unexpected_responses....................: 0       0/s
+
+    HTTP
+    http_req_duration.......................: avg=365.89ms min=5.33ms  med=359.84ms max=763.87ms p(90)=452.95ms p(95)=486.63ms
+      { expected_response:true }............: avg=365.89ms min=5.33ms  med=359.84ms max=763.87ms p(90)=452.95ms p(95)=486.63ms
+    http_req_failed.........................: 0.00%   0 out of 5061
+    http_reqs...............................: 5061    131.436783/s
+
+    EXECUTION
+    iteration_duration......................: avg=370.51ms min=39.02ms med=360.7ms  max=800.55ms p(90)=453.87ms p(95)=488.72ms
+    iterations..............................: 5000    129.852581/s
+    vus.....................................: 50      min=0         max=50
+    vus_max.................................: 50      min=50        max=50
+
+    NETWORK
+    data_received...........................: 1.3 MB  33 kB/s
+    data_sent...............................: 1.3 MB  33 kB/s
+
+random_transfers ✓ [ 100% ] 50 VUs  00m37.2s/10m0s  5000/5000 shared iters
