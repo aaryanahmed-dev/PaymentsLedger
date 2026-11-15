@@ -39,8 +39,13 @@ public class TransferService {
             throw new InvalidTransferException("Cannot transfer to the same account");
         }
 
-        Account from = findAccount(fromAccountId);
-        Account to = findAccount(toAccountId);
+        // Lock both account rows before reading their balances, always lowest id first.
+        // If A->B and B->A run at the same time, both try to lock the same row first,
+        // so one simply waits for the other instead of each holding the row the other needs.
+        Account lower = lockAccount(Math.min(fromAccountId, toAccountId));
+        Account higher = lockAccount(Math.max(fromAccountId, toAccountId));
+        Account from = fromAccountId < toAccountId ? lower : higher;
+        Account to = fromAccountId < toAccountId ? higher : lower;
         if (!from.getCurrency().equals(to.getCurrency())) {
             throw new CurrencyMismatchException(from.getCurrency(), to.getCurrency());
         }
@@ -62,10 +67,11 @@ public class TransferService {
     /** A deposit is a transfer from the EXTERNAL funding account of the same currency. */
     @Transactional
     public TransferResponse deposit(Long accountId, BigDecimal amount) {
-        Account account = findAccount(accountId);
-        Account funding = accountRepo.findFirstByAccountTypeAndCurrency(AccountType.EXTERNAL, account.getCurrency())
-                .orElseThrow(() -> new UnsupportedCurrencyException(account.getCurrency()));
-        return transfer(funding.getId(), accountId, amount);
+        String currency = accountRepo.findCurrencyById(accountId)
+                .orElseThrow(() -> new AccountNotFoundException(accountId));
+        Long fundingAccountId = accountRepo.findIdByAccountTypeAndCurrency(AccountType.EXTERNAL, currency)
+                .orElseThrow(() -> new UnsupportedCurrencyException(currency));
+        return transfer(fundingAccountId, accountId, amount);
     }
 
     @Transactional(readOnly = true)
@@ -75,8 +81,8 @@ public class TransferService {
         return TransferResponse.from(transfer);
     }
 
-    private Account findAccount(Long id) {
-        return accountRepo.findById(id)
+    private Account lockAccount(Long id) {
+        return accountRepo.findByIdForUpdate(id)
                 .orElseThrow(() -> new AccountNotFoundException(id));
     }
 

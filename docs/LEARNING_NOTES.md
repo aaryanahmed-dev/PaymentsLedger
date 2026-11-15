@@ -186,3 +186,91 @@ ledger invariants still hold after a 422.
 With MockMvc the test and the service would share one transaction that never commits, so the
 tests would not exercise real commit behaviour, and it cannot work at all for the concurrency
 tests, where several threads each need their own transaction.
+
+---
+
+## Phase 3 – Concurrency
+
+### What was built
+Transfers are now safe when many happen at once. The tests were written first and run against
+the Phase 1 code, where all three failed:
+
+| Test (`transfer/TransferConcurrencyTest`) | Result before the fix |
+|---|---|
+| 100 concurrent withdrawals of 10.00 from a balance of 100.00 | Only 86 of the expected 90 were rejected for insufficient funds; the rest hit MySQL deadlock errors |
+| 50 transfers A→B and 50 B→A at the same time | MySQL deadlock errors |
+| 50 concurrent deposits to one account | MySQL deadlock errors |
+
+After the fix all three pass, and they passed on three consecutive runs.
+
+### Where the key code lives
+- `account/AccountRepository.java` – `findByIdForUpdate`, annotated `@Lock(PESSIMISTIC_WRITE)`.
+- `transfer/TransferService.java` – `transfer()` locks both accounts, lowest id first, before
+  reading either balance. `deposit()` looks up the currency and the funding account's id
+  without loading entities.
+- `backend/src/test/.../transfer/TransferConcurrencyTest.java` – the tests and the
+  `runConcurrently` helper built on `ExecutorService` and `CountDownLatch`.
+
+### Concepts
+
+**The race condition (lost update).** A transfer is read-then-write: read the balance, check
+it, write the new balance. Two transactions can both read 100.00, both decide 10.00 is
+affordable, and both write 90.00. One withdrawal has vanished. With enough of them the account
+goes negative even though every individual check passed.
+
+**Pessimistic locking.** `@Lock(PESSIMISTIC_WRITE)` makes Hibernate run
+`SELECT ... FOR UPDATE`. MySQL locks that row until the transaction commits or rolls back.
+A second transaction asking for the same row waits, and when it gets the row it reads the
+balance the first one committed. The check and the write can no longer be interleaved.
+
+**Deadlock and lock ordering.** Transfer A→B locks A then B. Transfer B→A locks B then A.
+If each gets its first lock, each waits forever for the other's: a deadlock. MySQL detects it
+and kills one transaction. The cure is to make every transaction take locks in the same
+order. Here that is ascending account id, so A→B and B→A both lock the lower id first; one
+gets it and the other waits its turn.
+
+**Why the unlocked code deadlocked rather than just losing updates.** Inserting a `transfers`
+row takes a *shared* lock on the two account rows (because of the foreign keys). Two
+transactions could both hold the shared lock and then both need to upgrade it to an
+exclusive lock for the `UPDATE`, each blocked by the other.
+
+**A Hibernate trap: the persistence context.** Within one transaction Hibernate keeps one
+object per row. If `deposit()` had loaded the `Account` normally and then `transfer()` asked
+for it again with a lock, MySQL would lock the row, but Hibernate would hand back the object
+it already had, with the balance read *before* the lock. That is the lost update again, by a
+back door. So `deposit()` only fetches the currency string and the funding account's id, and
+the locked read is the first time the entity is loaded.
+
+**`CountDownLatch`.** Threads started in a loop do not start together. Each test thread
+counts down `ready` and then blocks on `start`; when all are waiting, the test releases them
+with one `start.countDown()`. That gives the most overlap and makes the race reproducible.
+
+### Interview questions
+
+**Pessimistic or optimistic locking: which and why?**
+Optimistic locking (`@Version`) lets everyone proceed and fails the loser at commit, who must
+retry. It suits low contention. Pessimistic locking makes the loser wait instead. For a
+payments ledger, hot accounts are normal (a merchant, the funding account), so optimistic
+locking would cause many retries, and the retry logic would have to be written and tested.
+Pessimistic locks are simpler and correct. The trade-off is throughput: transfers touching the
+same account run one at a time.
+
+**How do you prevent deadlocks?**
+Acquire locks in a consistent global order, here by ascending account id. Also keep
+transactions short, and lock everything needed up front rather than part-way through.
+
+**What isolation level does MySQL use, and does it prevent this race by itself?**
+InnoDB defaults to REPEATABLE READ. It gives each transaction a consistent snapshot for plain
+reads, but two transactions can still read the same balance and both write, so it does not
+prevent lost updates. `SELECT ... FOR UPDATE` does, because it is a locking read of the latest
+committed row.
+
+**How did you test it?**
+Tests first. 100 threads released together by a `CountDownLatch` against a real MySQL, then
+assertions on the outcome: exactly 10 of 100 withdrawals succeed, the balance is exactly zero,
+no deadlock exceptions, and the ledger invariants hold. They failed before the fix and pass
+after it, repeatedly.
+
+**Would this work with several application instances?**
+Yes. The lock is held by the database, not by the JVM, so it works across any number of
+instances. A Java `synchronized` block would only protect one instance.
