@@ -18,12 +18,19 @@ public class Account {
     private String currency;
     private BigDecimal balance;
     private Instant createdAt;
+    @Enumerated(EnumType.STRING)
+    private AccountType accountType;
 
     public Account(String ownerName, String currency) {
         this.ownerName = ownerName;
         this.currency = currency;
         this.balance = BigDecimal.ZERO;
+        this.accountType = AccountType.CUSTOMER;
         this.createdAt = Instant.now();
+    }
+
+    public AccountType getAccountType() {
+        return accountType;
     }
 
     protected Account() {

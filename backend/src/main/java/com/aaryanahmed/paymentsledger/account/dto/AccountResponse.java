@@ -1,6 +1,7 @@
 package com.aaryanahmed.paymentsledger.account.dto;
 
 import com.aaryanahmed.paymentsledger.account.Account;
+import com.aaryanahmed.paymentsledger.account.AccountType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -9,7 +10,8 @@ public record AccountResponse (Long id,
                                String ownerName,
                                String currency,
                                BigDecimal balance,
-                               Instant createdAt
+                               Instant createdAt,
+                               AccountType accountType
 ){
     public static AccountResponse from(Account account) {
         return new AccountResponse(
@@ -17,7 +19,8 @@ public record AccountResponse (Long id,
                 account.getOwnerName(),
                 account.getCurrency(),
                 account.getBalance(),
-                account.getCreatedAt()
+                account.getCreatedAt(),
+                account.getAccountType()
         );
     }
 }

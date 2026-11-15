@@ -4,6 +4,9 @@ import com.aaryanahmed.paymentsledger.account.dto.AccountResponse;
 import com.aaryanahmed.paymentsledger.account.dto.CreateAccountRequest;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Service
 public class AccountService {
 
@@ -23,5 +26,14 @@ public class AccountService {
         Account account = accountRepo.findById(id)
                 .orElseThrow(() -> new AccountNotFoundException(id));
         return AccountResponse.from(account);
+    }
+
+    public List<AccountResponse> getAllAccounts() {
+        List<Account> accounts = accountRepo.findAll();
+        List<AccountResponse> accountResponses = new ArrayList<>();
+        for (Account account : accounts) {
+            accountResponses.add(AccountResponse.from(account));
+        }
+        return accountResponses;
     }
 }
