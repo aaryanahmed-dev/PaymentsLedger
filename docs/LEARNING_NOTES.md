@@ -713,3 +713,47 @@ in Docker on the runner, so there is no separate database service to configure.
 It protects users' browsers from malicious websites making cross-origin calls with their
 credentials. It does not stop non-browser clients, so the API still needs authentication,
 which this project does not have yet.
+
+---
+
+## Phase 10 – README
+
+### What was built
+`README.md` at the root of the repository: overview, guarantees, architecture and data-model
+diagrams, API reference with real example responses, design decisions with their trade-offs,
+test strategy, the measured load test results, how to run everything, limitations and
+future improvements.
+
+### Principles behind it
+- **Every claim maps to something in the repository.** Each guarantee names the mechanism that
+  enforces it and the test that proves it. The example responses and the load test figures
+  are copied from real runs, with the machine they were measured on.
+- **Trade-offs, not just choices.** Each design decision says what it costs. Being able to say
+  what a design is bad at is what shows it was a decision rather than a default.
+- **Limitations are stated.** No authentication, single currency, single dispatcher instance.
+  A reviewer will find these anyway; listing them shows you know.
+- **Diagrams as code.** The Mermaid diagrams are text in the README, rendered by GitHub, so
+  they are versioned and reviewed like code.
+
+### Interview questions
+
+**Walk me through what happens when I POST a transfer.**
+Follow the sequence diagram: validation, claim the idempotency key, lock both accounts in id
+order, debit and credit, insert the transfer and two entries, insert the outbox event, store
+the response, commit. Then, separately, the dispatcher delivers the webhook.
+
+**What would you change before running this in production?**
+Authentication first. Then public non-sequential ids, key expiry, multi-instance-safe
+webhook dispatch, monitoring and alerting on reconciliation failures, and a decision on how
+to scale the database (read replicas for history and reconciliation queries).
+
+**What was the hardest bug or subtlety?**
+Good candidates from this project: the deadlocks in the unlocked version came from foreign-key
+shared locks being upgraded, not from the obvious read-modify-write race; and Hibernate would
+reuse an already-loaded, stale `Account` after a `FOR UPDATE` query, which is why `deposit()`
+fetches only the currency and id before the locked read.
+
+**Which single test best demonstrates the project?**
+`concurrentWithdrawalsNeverOverdrawTheAccount`: 100 simultaneous withdrawals of 10.00 from
+100.00 against a real MySQL, exactly 10 succeed, the balance is exactly zero and the ledger
+invariants hold. It failed before the locking was added.
