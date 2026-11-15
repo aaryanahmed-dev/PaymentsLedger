@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * so every class extending this shares ONE context and ONE database container.
  * Tests therefore create their own accounts instead of assuming an empty database.
  */
-@SpringBootTest
+@SpringBootTest(properties = "scheduling.enabled=false")
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 public abstract class IntegrationTest {

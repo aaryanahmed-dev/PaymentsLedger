@@ -368,3 +368,115 @@ response. One transfer, two identical responses.
 **Why not make the reversal update or delete the original transfer?**
 Auditability. Financial records are never rewritten; corrections are new records. It also keeps
 the invariants trivially true, since a reversal is just another balanced pair of entries.
+
+---
+
+## Phase 5 – Webhooks via the outbox pattern
+
+### What was built
+Other systems can now be told when money moves. A client registers a URL; every transfer then
+produces a `transfer.created` event (or `transfer.reversed`) that is POSTed to that URL, signed,
+and retried if the receiver is down.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /webhook-endpoints` `{"url": "https://..."}` | Register a URL. The response contains the generated `secret`, shown only this once. |
+| `GET /webhook-endpoints` | List registered endpoints (without secrets) |
+
+What the receiver gets:
+
+```
+POST /your/url
+Content-Type: application/json
+X-Webhook-Event-Id: 42
+X-Webhook-Signature: t=1700000000,v1=<64 hex characters>
+
+{"type":"transfer.created","data":{"id":7,"fromAccountId":1,"toAccountId":5,"amount":10.00,...}}
+```
+
+### Where the key code lives
+- `webhook/OutboxService.java` – `enqueue()` writes the events; `recordDelivered()` / `recordFailure()` save results.
+- `transfer/TransferService.java` – calls `outboxService.enqueue(...)` inside the transfer transaction.
+- `webhook/WebhookDispatcher.java` – the `@Scheduled` job that sends pending events.
+- `webhook/OutboxEvent.java` – retry state and the backoff rule (`markAttemptFailed`).
+- `webhook/WebhookSigner.java` – HMAC-SHA256 signing.
+- `common/SchedulingConfig.java` – `@EnableScheduling`, switchable off for tests.
+- `resources/db/migration/V8__create_webhooks_and_outbox.sql`.
+- Tests: `webhook/WebhookTest` (MockWebServer), `OutboxEventTest`, `WebhookSignerTest`.
+
+### Concepts
+
+**The dual-write problem.** After a transfer commits we want to send an HTTP request. Two
+separate systems (our database, their server) cannot be updated atomically:
+- Send first, then commit: if the commit fails, we announced a transfer that never happened.
+- Commit first, then send: if the app crashes in between, the event is lost for ever.
+
+**The outbox pattern.** Do not send anything during the request. Write a row describing the
+event into an `outbox_events` table **in the same transaction** as the transfer. Now it is one
+database commit: both exist or neither does. A separate background job reads the table and
+does the sending, and it can retry as often as needed because the event is safely stored.
+`enqueue()` is marked `@Transactional(propagation = MANDATORY)`, which throws if it is ever
+called outside a transaction, so this guarantee cannot be broken by accident.
+
+**At-least-once delivery.** If the receiver processes the event but its 200 response is lost,
+we will send it again. Duplicates are possible; losing an event is not. That is why every
+request carries `X-Webhook-Event-Id`: the receiver remembers the ids it has handled and
+ignores repeats. (The same idea as idempotency keys, in the other direction.)
+
+**Exponential backoff.** After a failure, wait before retrying, and double the wait each time:
+2s, 4s, 8s, 16s. A receiver that is struggling gets breathing room instead of a flood of
+retries. After 5 attempts the event is marked `FAILED` and left alone (a "dead" event that a
+human can inspect; `last_error` says why).
+
+**HMAC signatures.** Anyone can POST to a public URL, so the receiver needs proof that a
+request came from us. Both sides know the secret. We send
+`HMAC-SHA256(secret, timestamp + "." + body)`; the receiver computes the same thing and
+compares. Without the secret a valid signature cannot be produced, and changing one byte of
+the body changes the signature. Signing the timestamp too lets the receiver reject requests
+older than a few minutes, which defeats replaying a captured request.
+
+**No transaction around the HTTP call.** `WebhookDispatcher.deliver()` is not `@Transactional`.
+Holding a database connection and row locks while waiting up to 5 seconds on someone else's
+server would exhaust the connection pool. Each result is saved in its own short transaction.
+
+**`@Scheduled(fixedDelay)`.** Runs the method on a background thread, waiting the given time
+*after* the previous run finishes, so runs never overlap. Tests switch scheduling off
+(`scheduling.enabled=false`) and call `dispatchPending()` directly, which makes them
+deterministic. To simulate the backoff delay passing, the test rewinds `next_attempt_at`.
+
+### Limitations worth knowing
+- One dispatcher instance is assumed. Two instances could both send the same event (harmless
+  given at-least-once, but wasteful). The usual fix is `SELECT ... FOR UPDATE SKIP LOCKED`.
+- Events are sent one at a time, so one slow endpoint delays the others.
+- Endpoints cannot be deleted through the API, secrets are stored in plain text, and there is
+  no check against registering internal addresses. All acceptable without authentication, none
+  acceptable in production.
+
+### Interview questions
+
+**What problem does the outbox pattern solve?**
+Reliably publishing an event about a database change. You cannot atomically commit to a
+database and call another system, so you store the event in the database in the same
+transaction and deliver it asynchronously. It turns "maybe lost" into "delivered at least once".
+
+**Why not just send the webhook after the transaction commits?**
+The process can crash, be redeployed or lose network between the commit and the send, and
+then nothing remembers that an event is owed. With the outbox, the debt is recorded durably.
+
+**What delivery guarantee do you provide, and what must receivers do?**
+At-least-once. Receivers must be idempotent, typically by storing the event id and skipping
+ids they have seen.
+
+**How does the receiver verify a webhook?**
+Read `t` and `v1` from the signature header, compute `HMAC-SHA256(secret, t + "." + rawBody)`
+over the raw bytes received, compare with `v1` using a constant-time comparison, and reject
+if `t` is too old.
+
+**Why exponential backoff rather than retrying immediately?**
+Most failures are either momentary or last minutes. Immediate retries waste effort and add
+load to a server that is already failing. Backing off spreads retries out; a maximum number
+of attempts stops a permanently broken endpoint from being retried for ever.
+
+**How would this change with Kafka?**
+The outbox table stays. Only the dispatcher changes: instead of POSTing to URLs it publishes
+rows to a topic. The pattern is the same because Kafka has the same dual-write problem.

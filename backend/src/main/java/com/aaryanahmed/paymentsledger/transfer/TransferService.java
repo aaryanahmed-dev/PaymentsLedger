@@ -7,6 +7,7 @@ import com.aaryanahmed.paymentsledger.account.AccountType;
 import com.aaryanahmed.paymentsledger.ledger.LedgerEntry;
 import com.aaryanahmed.paymentsledger.ledger.LedgerEntryRepository;
 import com.aaryanahmed.paymentsledger.transfer.dto.TransferResponse;
+import com.aaryanahmed.paymentsledger.webhook.OutboxService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,13 +19,16 @@ public class TransferService {
     private final AccountRepository accountRepo;
     private final TransferRepository transferRepo;
     private final LedgerEntryRepository entryRepo;
+    private final OutboxService outboxService;
 
     public TransferService(AccountRepository accountRepo,
                            TransferRepository transferRepo,
-                           LedgerEntryRepository entryRepo) {
+                           LedgerEntryRepository entryRepo,
+                           OutboxService outboxService) {
         this.accountRepo = accountRepo;
         this.transferRepo = transferRepo;
         this.entryRepo = entryRepo;
+        this.outboxService = outboxService;
     }
 
     /**
@@ -85,6 +89,11 @@ public class TransferService {
         // Double entry: one negative and one positive entry that cancel out.
         entryRepo.save(new LedgerEntry(transfer.getId(), fromAccountId, amount.negate()));
         entryRepo.save(new LedgerEntry(transfer.getId(), toAccountId, amount));
+
+        // Outbox pattern: the webhook event is written in this same transaction, so an event
+        // exists if and only if the transfer committed. It is sent later by WebhookDispatcher.
+        outboxService.enqueue(reversalOf == null ? "transfer.created" : "transfer.reversed",
+                TransferResponse.from(transfer));
 
         return transfer;
     }
