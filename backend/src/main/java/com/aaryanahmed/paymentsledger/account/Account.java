@@ -29,6 +29,31 @@ public class Account {
         this.createdAt = Instant.now();
     }
 
+    /**
+     * Takes money out of the account. CUSTOMER accounts can never go below zero;
+     * EXTERNAL accounts can, because they represent money entering from outside the system.
+     */
+    public void debit(BigDecimal amount) {
+        requirePositive(amount);
+        BigDecimal newBalance = balance.subtract(amount);
+        if (accountType == AccountType.CUSTOMER && newBalance.compareTo(BigDecimal.ZERO) < 0) {
+            throw new InsufficientFundsException(id);
+        }
+        balance = newBalance;
+    }
+
+    /** Puts money into the account. */
+    public void credit(BigDecimal amount) {
+        requirePositive(amount);
+        balance = balance.add(amount);
+    }
+
+    private static void requirePositive(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Amount must be greater than zero");
+        }
+    }
+
     public AccountType getAccountType() {
         return accountType;
     }

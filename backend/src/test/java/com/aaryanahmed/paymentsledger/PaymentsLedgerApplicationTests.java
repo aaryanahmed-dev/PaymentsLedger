@@ -1,11 +1,10 @@
 package com.aaryanahmed.paymentsledger;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
 
-@SpringBootTest
-class PaymentsLedgerApplicationTests {
+class PaymentsLedgerApplicationTests extends IntegrationTest {
 
+    // Passes if the application starts: Flyway migrations run and Hibernate validates the schema.
     @Test
     void contextLoads() {
     }
