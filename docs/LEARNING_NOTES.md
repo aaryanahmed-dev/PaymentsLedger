@@ -119,3 +119,70 @@ So the rule cannot be bypassed. Any code path that reduces a balance has to go t
 So that deposits follow the same double-entry rule as everything else and the entries still sum
 to zero. The funding account's negative balance is meaningful: it is the total amount of money
 that has entered the system from outside.
+
+---
+
+## Phase 2 – Tests
+
+### What was built
+54 tests in two layers:
+
+- **Unit tests** (`account/AccountTest`): the debit and credit rules, with no Spring and no
+  database. They create an `Account` with `new` and call its methods. All 15 run in well under a second.
+- **Integration tests** (`AccountControllerTest`, `TransferControllerTest`, `LedgerControllerTest`,
+  `TransferFlowIntegrationTest`): HTTP requests through the whole application into a real MySQL.
+  Every endpoint has a success test and a test for each way it can fail.
+
+All test code is under `backend/src/test/java/com/aaryanahmed/paymentsledger/`.
+
+### Where the key code lives
+- `IntegrationTest.java` – base class. Starts the application once, gives every test `mockMvc`,
+  and has helpers (`createAccount`, `deposit`, `transfer`) so tests read like a story.
+- `TestcontainersConfiguration.java` – the MySQL container.
+- `LedgerInvariants.java` – the reusable check that entries sum to zero and balances match.
+  `TransferControllerTest` runs it in `@AfterEach`, so it is checked after every test in that
+  class, including the ones where the request was rejected.
+
+### Concepts
+
+**The test pyramid.** Many fast unit tests for logic, fewer slower integration tests for wiring.
+The overdraft rule has many edge cases (zero, negative, exact balance, one cent over), so they
+are tested at unit level where each case costs a millisecond. The integration tests then only
+need to prove the rule is connected to HTTP: one request, one 422.
+
+**MockMvc.** It calls the controllers through Spring's real request handling (JSON parsing,
+validation, exception handlers) without opening a network port. `jsonPath("$.balance")` reads
+a field out of the JSON response.
+
+**Arrange, act, assert.** Each test sets up its own data, does one thing, then checks the
+result. The blank lines in the tests separate those three steps.
+
+**Test isolation without cleanup.** All integration tests share one database and never delete
+anything. That works because each test creates its own accounts and only asserts on those.
+It also makes the invariant check stronger: it runs over everything every earlier test left behind.
+
+**Parameterized tests.** `@ParameterizedTest` with `@ValueSource` runs the same test once per
+value, for example each invalid amount (`0`, `-5.00`, `10.001`, `"abc"`, `null`).
+
+### Interview questions
+
+**Why Testcontainers rather than H2 or mocking the repositories?**
+The risky parts of this project are the database behaviours: transactions, constraints, and
+(next phase) row locks. H2 does not behave like MySQL for those, and mocks do not behave like
+a database at all, so tests could pass while production fails. The cost is speed: the
+container takes a few seconds to start, once per test run.
+
+**What is the difference between a unit test and an integration test?**
+A unit test checks one class in isolation, with no framework or I/O. An integration test checks
+that several real parts work together, here controller, validation, service, JPA and MySQL.
+Unit tests tell you *which* rule broke; integration tests tell you the feature really works.
+
+**How do you test that a failed operation left no trace?**
+Assert on state after the failure, not only on the status code. `rejectedTransferChangesNothing`
+checks that both balances are unchanged, that the receiver has no entries, and that the
+ledger invariants still hold after a 422.
+
+**Why not roll back each test with `@Transactional` on the test class?**
+With MockMvc the test and the service would share one transaction that never commits, so the
+tests would not exercise real commit behaviour, and it cannot work at all for the concurrency
+tests, where several threads each need their own transaction.
