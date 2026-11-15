@@ -625,3 +625,91 @@ be serialised. Real systems have far more than 20 accounts, so contention is muc
 **Why does p95 matter more than the average?**
 Users experience individual requests, not averages. A good average can hide a tail of very
 slow requests, and at scale a "rare" 1-in-20 slow request happens constantly.
+
+---
+
+## Phase 8 – Ship it
+
+### What was built
+- **Docker:** `backend/Dockerfile` (multi-stage) and `docker-compose.yml`. `docker compose up --build`
+  starts MySQL and the API with no other setup.
+- **API documentation:** springdoc-openapi generates an OpenAPI description from the controllers
+  (`/v3/api-docs`) and serves Swagger UI at `/swagger-ui.html`, with example request bodies.
+- **CI:** `.github/workflows/ci.yml` runs `./mvnw -B verify` on every push and pull request.
+- **Configuration through environment variables:**
+
+  | Variable | Default | Used for |
+  |---|---|---|
+  | `DB_URL` | `jdbc:mysql://localhost:3306/payments_ledger` | Database location |
+  | `DB_USER` | `ledger_app` | Database user |
+  | `DB_PASSWORD` | (empty) | Database password |
+  | `PORT` | `8080` | HTTP port |
+  | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Browser origins allowed to call the API |
+
+### Where the key code lives
+- `backend/Dockerfile`, `backend/.dockerignore`, `docker-compose.yml`, `.env.example`
+- `.github/workflows/ci.yml`
+- `common/OpenApiConfig.java`, and `@Operation` / `@Schema(example = ...)` annotations on the controllers and request records
+- `common/CorsConfig.java`
+- `backend/src/main/resources/application.properties`
+- Test: `common/ApiConfigTest` (OpenAPI document lists the endpoints; CORS allows and refuses the right origins)
+
+### Concepts
+
+**Multi-stage Docker build.** Stage 1 uses a large image with the JDK and Maven to compile the
+jar. Stage 2 starts from a small JRE-only image and copies in just the jar. The final image
+has no compiler, no Maven and no source code: smaller, and less for an attacker to use.
+
+**Layer caching.** Each Dockerfile instruction makes a layer, reused if its inputs are
+unchanged. Copying `pom.xml` and downloading dependencies *before* copying `src` means a code
+change only re-runs the compile step, not the dependency download.
+
+**Compose health checks.** `depends_on` alone only waits for the MySQL container to *start*,
+and MySQL takes several seconds to accept connections. `condition: service_healthy` with a
+`healthcheck` makes the API wait until MySQL is actually ready.
+
+**Twelve-factor configuration.** The same jar or image runs everywhere; only environment
+variables differ. Nothing environment-specific, and no secret, is compiled in or committed.
+`${DB_URL:default}` in `application.properties` reads the variable with a local fallback.
+
+**CORS.** A browser refuses to let a page from one origin read responses from another unless
+the server opts in. Before a cross-origin POST it sends a "preflight" `OPTIONS` request
+asking permission; `CorsConfig` answers it. It is a browser protection only: curl and other
+servers ignore it, so it is not a substitute for authentication.
+
+**OpenAPI.** A machine-readable description of the API generated from the code, so it cannot
+drift from what is implemented. Swagger UI renders it as a page where requests can be tried.
+
+**Continuous integration.** Every push is built and tested on a clean machine, so "works on my
+machine" problems and broken commits are caught immediately. GitHub's Linux runners include
+Docker, so the Testcontainers tests run there unchanged.
+
+### Verified locally
+`docker compose up --build` was run and every main endpoint exercised with curl, including
+Swagger UI, an idempotent replay, a 409, a 422, a reversal and the reconciliation. The
+scheduled webhook dispatcher was seen retrying an unreachable endpoint with 2 s then 4 s
+delays. `./mvnw -B verify` passes with 100 tests. The GitHub Actions workflow itself has not
+run yet: it runs the first time the branch is pushed.
+
+### Interview questions
+
+**Why a multi-stage Dockerfile?**
+To separate build tools from the runtime image. The result is smaller, starts from a minimal
+base, and does not ship source or a compiler.
+
+**How do you handle secrets and configuration?**
+Environment variables, injected at deploy time. Defaults in the repository are for local
+development only, `.env` is git-ignored, and `.env.example` documents what is needed.
+
+**How does the app wait for the database in Compose?**
+A health check on the MySQL service plus `depends_on: condition: service_healthy`. In
+production you would also want the app to tolerate the database being briefly unavailable.
+
+**What does CI run, and how do integration tests get a database there?**
+`./mvnw verify`: compile, unit tests, integration tests, package. Testcontainers starts MySQL
+in Docker on the runner, so there is no separate database service to configure.
+
+**Is CORS a security feature for the API?**
+It protects users' browsers from malicious websites making cross-origin calls with their
+credentials. It does not stop non-browser clients, so the API still needs authentication,
+which this project does not have yet.

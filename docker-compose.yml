@@ -1,0 +1,39 @@
+# Runs the whole system locally:  docker compose up --build
+#   API:        http://localhost:8080
+#   Swagger UI: http://localhost:8080/swagger-ui.html
+#
+# Values come from environment variables or a .env file next to this file (see .env.example).
+# The defaults below are for local development only.
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: payments_ledger
+      MYSQL_USER: ${DB_USER:-ledger_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-local-dev-only}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-local-dev-only-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: ./backend
+    depends_on:
+      mysql:
+        condition: service_healthy   # wait until MySQL accepts connections, not just until it starts
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/payments_ledger
+      DB_USER: ${DB_USER:-ledger_app}
+      DB_PASSWORD: ${DB_PASSWORD:-local-dev-only}
+      PORT: 8080
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+    ports:
+      - "${PORT:-8080}:8080"
+
+volumes:
+  mysql-data:

@@ -61,7 +61,9 @@ public class WebhookDispatcher {
                 failed(event, "HTTP " + status);
             }
         } catch (IOException | IllegalArgumentException e) {
-            failed(event, e.getClass().getSimpleName() + ": " + e.getMessage());
+            // Some network exceptions (e.g. connection refused) carry no message.
+            String reason = e.getMessage() == null ? "" : ": " + e.getMessage();
+            failed(event, e.getClass().getSimpleName() + reason);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();   // the application is shutting down; try again next start
         }
