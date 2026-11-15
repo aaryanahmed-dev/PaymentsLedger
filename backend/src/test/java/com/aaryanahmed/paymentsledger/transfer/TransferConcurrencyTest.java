@@ -6,15 +6,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 
+import static com.aaryanahmed.paymentsledger.ConcurrentRunner.runConcurrently;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -78,49 +72,5 @@ class TransferConcurrencyTest extends IntegrationTest {
         assertThat(failures).isEmpty();
         assertThat(balanceOf(alice)).isEqualByComparingTo("50.00");
         assertLedgerInvariants();
-    }
-
-    private BigDecimal balanceOf(long accountId) {
-        return jdbc.queryForObject("SELECT balance FROM accounts WHERE id = ?", BigDecimal.class, accountId);
-    }
-
-    private interface Task {
-        Object run(int index) throws Exception;
-    }
-
-    /**
-     * Runs the task once on each of {@code count} threads, released at the same instant,
-     * and returns the exceptions thrown by the tasks that failed.
-     */
-    private static List<Throwable> runConcurrently(int count, Task task) throws Exception {
-        ExecutorService executor = Executors.newFixedThreadPool(count);
-        CountDownLatch ready = new CountDownLatch(count);
-        CountDownLatch start = new CountDownLatch(1);
-        try {
-            List<Future<Object>> futures = new ArrayList<>();
-            for (int i = 0; i < count; i++) {
-                int index = i;
-                Callable<Object> job = () -> {
-                    ready.countDown();
-                    start.await();          // every thread waits here...
-                    return task.run(index);
-                };
-                futures.add(executor.submit(job));
-            }
-            ready.await();
-            start.countDown();              // ...until this releases them all at once
-
-            List<Throwable> failures = new ArrayList<>();
-            for (Future<Object> future : futures) {
-                try {
-                    future.get(60, TimeUnit.SECONDS);
-                } catch (java.util.concurrent.ExecutionException e) {
-                    failures.add(e.getCause());
-                }
-            }
-            return failures;
-        } finally {
-            executor.shutdownNow();
-        }
     }
 }

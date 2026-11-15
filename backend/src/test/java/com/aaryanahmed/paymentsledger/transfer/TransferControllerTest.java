@@ -98,7 +98,8 @@ class TransferControllerTest extends IntegrationTest {
 
     @Test
     void missingFieldsAre400WithFieldErrors() throws Exception {
-        mockMvc.perform(post("/transfers").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mockMvc.perform(post("/transfers").header("Idempotency-Key", "missing-fields-test")
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.fromAccountId").exists())
                 .andExpect(jsonPath("$.errors.toAccountId").exists())

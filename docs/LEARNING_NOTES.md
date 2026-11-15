@@ -274,3 +274,97 @@ after it, repeatedly.
 **Would this work with several application instances?**
 Yes. The lock is held by the database, not by the JVM, so it works across any number of
 instances. A Java `synchronized` block would only protect one instance.
+
+---
+
+## Phase 4 – Idempotency and reversals
+
+### What was built
+- `POST /transfers` and `POST /accounts/{id}/deposits` now **require** an `Idempotency-Key`
+  header (missing, blank or longer than 255 characters is a 400). Sending the same request
+  again with the same key returns the original response and moves no more money.
+- The same key with a *different* request is a 409.
+- `POST /transfers/{id}/reverse` creates the opposite transfer, linked to the original through
+  the new `reversal_of` column. A transfer can be reversed once; a reversal cannot be reversed
+  (both 409). A reversal fails with 422 if the receiver no longer has the money.
+
+### Where the key code lives
+- `idempotency/IdempotencyService.java` – `execute(key, request, responseType, action)`.
+- `idempotency/IdempotencyKeyRepository.java` – `insertIfAbsent` (`INSERT IGNORE`).
+- `transfer/TransferController.java` – builds the "same request" string and wraps the service call.
+- `transfer/TransferService.java` – `reverse()`, and the private `execute()` shared by
+  transfers and reversals.
+- Migrations `V6__create_idempotency_keys.sql`, `V7__add_transfer_reversal_of.sql`.
+- Tests: `idempotency/IdempotencyTest`, `transfer/TransferReversalTest`.
+
+### Concepts
+
+**Why idempotency.** A client sends a payment and the connection drops before the response
+arrives. Did it go through? The client cannot know, and retrying might charge twice. With an
+idempotency key the client generates one random key per *intended* payment and can retry
+safely: the server does the work once and repeats the answer.
+
+**How it works here.** In one transaction:
+1. `INSERT IGNORE` a row with the key and a SHA-256 hash of the request.
+2. If the insert happened, this is a new request: run the transfer, then store the JSON response in that row.
+3. If the row already existed: compare hashes. Different means 409. Same means return the stored response.
+
+Because the key row and the transfer commit together, there is never one without the other.
+If the transfer fails (for example insufficient funds), the key row is rolled back too, so
+the client may retry with the same key once the problem is fixed.
+
+**Why the unique constraint matters.** A check like "does this key exist? no? then insert"
+has the same race as the balance check in Phase 3: two requests can both see "no". The unique
+index makes the database the referee. When two transactions insert the same key, the second
+`INSERT` *waits* for the first transaction to finish. If the first commits, the second sees a
+duplicate and replays the stored response. If the first rolls back, the second proceeds.
+The test `concurrentDuplicatesCreateOneTransfer` sends 20 copies at once and gets 20 identical
+responses and one transfer.
+
+**Why the insert must be the first statement.** Under MySQL's REPEATABLE READ, a transaction's
+plain `SELECT`s see the database as it was at its *first* plain read. If the transaction read
+something before the `INSERT`, then waited on the other request, it would not be able to see
+the response the other request had just committed. The insert takes no snapshot, so the
+lookup that follows it sees the committed row.
+
+**What is hashed.** Not the raw body, but a string describing the request, such as
+`transfer:12:13:10.5`. So `10.5` and `10.50` count as the same request, and a key used for a
+deposit cannot be replayed against a transfer.
+
+**Reversals instead of deletes.** A ledger is append-only. To undo a transfer you add a new
+one in the opposite direction, so the history shows both that it happened and that it was undone.
+
+**Two layers of "at most once" for reversals.** `reverse()` locks the original transfer row
+(`SELECT ... FOR UPDATE`), so simultaneous reversals take turns and the second one finds the
+first one's reversal and returns 409. Underneath, `UNIQUE (reversal_of)` means the database
+would refuse a second reversal even if the application logic were wrong.
+
+### Limitations worth knowing
+- Only successful responses are stored. Stripe also stores and replays errors.
+- Keys are never expired or deleted. A real system would purge them after about 24 hours.
+- `INSERT IGNORE` is MySQL-specific.
+
+### Interview questions
+
+**What does idempotent mean?**
+Doing it once or many times has the same effect. `GET`, `PUT` and `DELETE` are idempotent by
+definition; `POST` is not, which is why payment APIs add idempotency keys.
+
+**Who generates the key, and why not the server?**
+The client, before the first attempt, typically a UUID. The point is to recognise a retry of
+a request whose response the client never received, so the identifier has to exist on the
+client before anything is sent.
+
+**Why store a hash of the request?**
+To catch a client bug: reusing a key for a different payment. Silently returning the old
+response would tell the client its new payment succeeded when nothing happened. A 409 makes
+the mistake visible.
+
+**Two identical requests arrive at the same millisecond. What happens?**
+Both try to insert the key. The unique index lets one through and blocks the other until the
+first commits. The second then finds the row, sees the same hash and returns the stored
+response. One transfer, two identical responses.
+
+**Why not make the reversal update or delete the original transfer?**
+Auditability. Financial records are never rewritten; corrections are new records. It also keeps
+the invariants trivially true, since a reversal is just another balanced pair of entries.

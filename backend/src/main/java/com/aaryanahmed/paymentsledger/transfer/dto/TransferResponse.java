@@ -10,7 +10,8 @@ public record TransferResponse(Long id,
                                Long toAccountId,
                                BigDecimal amount,
                                String currency,
-                               Instant createdAt
+                               Instant createdAt,
+                               Long reversalOf
 ){
     public static TransferResponse from(Transfer transfer) {
         return new TransferResponse(
@@ -19,7 +20,8 @@ public record TransferResponse(Long id,
                 transfer.getToAccountId(),
                 transfer.getAmount(),
                 transfer.getCurrency(),
-                transfer.getCreatedAt()
+                transfer.getCreatedAt(),
+                transfer.getReversalOf()
         );
     }
 }

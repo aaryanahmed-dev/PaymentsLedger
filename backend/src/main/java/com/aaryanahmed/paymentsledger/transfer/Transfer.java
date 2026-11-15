@@ -27,12 +27,20 @@ public class Transfer {
     private String currency;
     private Instant createdAt;
 
-    public Transfer(Long fromAccountId, Long toAccountId, BigDecimal amount, String currency) {
+    // The id of the transfer this one undoes, or null for an ordinary transfer.
+    private Long reversalOf;
+
+    public Transfer(Long fromAccountId, Long toAccountId, BigDecimal amount, String currency, Long reversalOf) {
         this.fromAccountId = fromAccountId;
         this.toAccountId = toAccountId;
         this.amount = amount;
         this.currency = currency;
+        this.reversalOf = reversalOf;
         this.createdAt = Instant.now();
+    }
+
+    public boolean isReversal() {
+        return reversalOf != null;
     }
 
     protected Transfer() {
@@ -61,5 +69,9 @@ public class Transfer {
 
     public Instant getCreatedAt() {
         return createdAt;
+    }
+
+    public Long getReversalOf() {
+        return reversalOf;
     }
 }

@@ -38,7 +38,31 @@ public class TransferService {
         if (fromAccountId.equals(toAccountId)) {
             throw new InvalidTransferException("Cannot transfer to the same account");
         }
+        return TransferResponse.from(execute(fromAccountId, toAccountId, amount, null));
+    }
 
+    /**
+     * Undoes a transfer by creating the opposite one, linked to the original.
+     * Nothing is deleted or edited: the original and its entries stay in the ledger.
+     */
+    @Transactional
+    public TransferResponse reverse(Long transferId) {
+        // Locking the original makes two simultaneous reversals of it take turns.
+        Transfer original = transferRepo.findByIdForUpdate(transferId)
+                .orElseThrow(() -> new TransferNotFoundException(transferId));
+        if (original.isReversal()) {
+            throw new TransferNotReversibleException("Transfer " + transferId + " is itself a reversal");
+        }
+        if (transferRepo.existsByReversalOf(transferId)) {
+            throw new TransferNotReversibleException("Transfer " + transferId + " has already been reversed");
+        }
+        // Same amount, sender and receiver swapped. The original receiver must still have
+        // the money: debit() applies the usual overdraft rule.
+        return TransferResponse.from(execute(
+                original.getToAccountId(), original.getFromAccountId(), original.getAmount(), transferId));
+    }
+
+    private Transfer execute(Long fromAccountId, Long toAccountId, BigDecimal amount, Long reversalOf) {
         // Lock both account rows before reading their balances, always lowest id first.
         // If A->B and B->A run at the same time, both try to lock the same row first,
         // so one simply waits for the other instead of each holding the row the other needs.
@@ -55,13 +79,14 @@ public class TransferService {
         from.debit(amount);
         to.credit(amount);
 
-        Transfer transfer = transferRepo.save(new Transfer(fromAccountId, toAccountId, amount, from.getCurrency()));
+        Transfer transfer = transferRepo.save(
+                new Transfer(fromAccountId, toAccountId, amount, from.getCurrency(), reversalOf));
 
         // Double entry: one negative and one positive entry that cancel out.
         entryRepo.save(new LedgerEntry(transfer.getId(), fromAccountId, amount.negate()));
         entryRepo.save(new LedgerEntry(transfer.getId(), toAccountId, amount));
 
-        return TransferResponse.from(transfer);
+        return transfer;
     }
 
     /** A deposit is a transfer from the EXTERNAL funding account of the same currency. */

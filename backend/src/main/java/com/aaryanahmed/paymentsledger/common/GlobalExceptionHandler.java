@@ -2,9 +2,12 @@ package com.aaryanahmed.paymentsledger.common;
 
 import com.aaryanahmed.paymentsledger.account.AccountNotFoundException;
 import com.aaryanahmed.paymentsledger.account.InsufficientFundsException;
+import com.aaryanahmed.paymentsledger.idempotency.IdempotencyKeyConflictException;
+import com.aaryanahmed.paymentsledger.idempotency.InvalidIdempotencyKeyException;
 import com.aaryanahmed.paymentsledger.transfer.CurrencyMismatchException;
 import com.aaryanahmed.paymentsledger.transfer.InvalidTransferException;
 import com.aaryanahmed.paymentsledger.transfer.TransferNotFoundException;
+import com.aaryanahmed.paymentsledger.transfer.TransferNotReversibleException;
 import com.aaryanahmed.paymentsledger.transfer.UnsupportedCurrencyException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -42,10 +45,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
     }
 
-    @ExceptionHandler(InvalidTransferException.class)
-    public ProblemDetail handleInvalidTransfer(InvalidTransferException ex)
+    @ExceptionHandler({InvalidTransferException.class, InvalidIdempotencyKeyException.class})
+    public ProblemDetail handleInvalidRequest(RuntimeException ex)
     {
         return ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+    }
+
+    // 409: the request conflicts with something that already happened.
+    @ExceptionHandler({IdempotencyKeyConflictException.class, TransferNotReversibleException.class})
+    public ProblemDetail handleConflict(RuntimeException ex)
+    {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     // Bean Validation failed on a @Valid request body: add which fields were wrong.
