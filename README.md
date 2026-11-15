@@ -342,6 +342,7 @@ The database schema is created by Flyway on startup. Stop with `docker compose d
 | `DB_USER` | `ledger_app` | Database user |
 | `DB_PASSWORD` | empty (`local-dev-only` in Docker Compose) | Database password |
 | `PORT` | `8080` | HTTP port |
+| `DB_POOL_SIZE` | `10` | Maximum number of database connections |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Comma-separated browser origins allowed to call the API |
 
 For Docker Compose, copy `.env.example` to `.env` to override the defaults. `.env` is ignored by git.

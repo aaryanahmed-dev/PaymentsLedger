@@ -1,0 +1,27 @@
+# Render "Blueprint": describes how to deploy the API on render.com.
+# In Render: New > Blueprint > pick this repository. Render then asks for the three
+# database values below; they are entered in the dashboard and never stored in git.
+
+services:
+  - type: web
+    name: payments-ledger
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /actuator/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DB_URL          # jdbc:mysql://<host>:<port>/<database>
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # Free hosted MySQL plans allow only a few connections.
+      - key: DB_POOL_SIZE
+        value: "3"
+      # The free instance has 512 MB of RAM; let the JVM heap use at most 60% of it.
+      - key: JAVA_TOOL_OPTIONS
+        value: "-XX:MaxRAMPercentage=60"
+    # Render sets PORT itself; the application reads it (server.port=${PORT:8080}).
