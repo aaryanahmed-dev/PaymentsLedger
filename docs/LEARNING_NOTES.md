@@ -480,3 +480,85 @@ of attempts stops a permanently broken endpoint from being retried for ever.
 **How would this change with Kafka?**
 The outbox table stays. Only the dispatcher changes: instead of POSTing to URLs it publishes
 rows to a topic. The pattern is the same because Kafka has the same dual-write problem.
+
+---
+
+## Phase 6 – Reconciliation
+
+### What was built
+- `GET /admin/reconciliation` checks the whole ledger and returns a report:
+
+  ```json
+  {
+    "checkedAt": "2026-11-15T21:40:00Z",
+    "balanced": true,
+    "ledgerTotal": 0.0000,
+    "accountsChecked": 12,
+    "entriesChecked": 48,
+    "mismatches": []
+  }
+  ```
+
+  If an account's balance disagrees with its entries, `balanced` is `false` and `mismatches`
+  lists the account with its `balance`, `entriesSum` and `difference`.
+- A background job runs the same check every 60 seconds and logs the result (an `ERROR` line
+  if the ledger is not balanced).
+- Spring Boot Actuator: `GET /actuator/health` returns `{"status":"UP"}` when the application
+  and its database connection are healthy.
+
+### Where the key code lives
+- `reconciliation/ReconciliationService.java` – the check itself.
+- `reconciliation/ReconciliationJob.java` – the `@Scheduled` wrapper.
+- `reconciliation/ReconciliationController.java` – the endpoint.
+- `resources/application.properties` – `reconciliation.interval-ms`, `management.endpoints.web.exposure.include=health`.
+- Test: `reconciliation/ReconciliationTest` (it corrupts a balance on purpose and checks the report catches it).
+
+### Concepts
+
+**Reconciliation.** Comparing two records of the same thing that should agree. Here: the
+cached `balance` column against the entries it was derived from. Banks reconcile their own
+ledger against external statements in the same spirit. It does not *prevent* errors; it
+*detects* them, including ones caused by things the application cannot control, such as a
+manual database fix or a bug in a future feature.
+
+**Defence in depth.** The transfer code is written to keep the invariants, the tests prove it
+does, the database constraints back it up, and reconciliation keeps checking in production.
+Each layer catches what the previous one might miss.
+
+**A consistent snapshot.** `reconcile()` runs several queries. If a transfer committed between
+them, the total and the per-account sums would describe different moments and a healthy ledger
+could look broken. `@Transactional(readOnly = true)` puts them in one transaction, and under
+REPEATABLE READ every query in a transaction sees the same snapshot. This is what makes it
+safe to reconcile while transfers are running.
+
+**Plain SQL where it fits.** The check is a `GROUP BY` over two whole tables. `JdbcTemplate`
+runs it as one SQL statement; doing it through JPA entities would load every row into memory.
+
+**Actuator.** Production-readiness endpoints that Spring Boot provides. `/actuator/health` is
+what a load balancer, Docker health check or Kubernetes probe calls to decide whether to send
+traffic to this instance. Only `health` is exposed; other actuator endpoints can leak
+configuration and must not be public.
+
+### Limitation worth knowing
+The check scans both tables completely. That is fine at this scale; a large ledger would
+reconcile incrementally (only accounts touched since the last run) or against a read replica.
+
+### Interview questions
+
+**If your tests prove the invariants hold, why reconcile at all?**
+Tests cover the code paths that exist today, against the inputs someone thought of.
+Reconciliation checks the real data continuously, whatever caused it. In finance the cost of
+an undetected error grows with time, so detection is worth having even if it never fires.
+
+**Why does the endpoint return 200 when the ledger is unbalanced?**
+The HTTP status describes the request, and the request succeeded: the check ran. The outcome
+is data in the body. A monitoring system reads `balanced`.
+
+**What would you do when reconciliation fails?**
+Alert immediately, and stop or restrict transfers on the affected accounts. Because entries
+are immutable, the entries are the source of truth: find where the balance diverged, fix the
+cause, then correct the balance with an explicit adjusting entry rather than by editing rows.
+
+**How do you reconcile while writes are happening?**
+Read everything inside one transaction at REPEATABLE READ, so all queries see one point in
+time. No locks are needed and transfers are not blocked.
